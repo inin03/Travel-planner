@@ -449,7 +449,10 @@ function goHome(){
   document.getElementById('homeScreen').style.display='block';
   document.getElementById('plannerScreen').style.display='none';
   document.getElementById('headerCenter').textContent='나의 여행 앨범';
-  document.getElementById('headerActions').innerHTML='<button class="btn-sm" onclick="openNewTripModal()">＋ 새 여행</button>';
+  document.getElementById('headerActions').innerHTML=
+    '<button class="btn-sm ghost" style="font-size:11px;padding:5px 12px" onclick="importAllTrips()">📂 불러오기</button>'+
+    '<button class="btn-sm ghost" style="font-size:11px;padding:5px 12px" onclick="exportAllTrips()">💾 전체백업</button>'+
+    '<button class="btn-sm" onclick="openNewTripModal()">＋ 새 여행</button>';
   document.querySelectorAll('.tab-btn').forEach((b,i)=>b.classList.toggle('active',i===0));
   document.querySelectorAll('.tab-content').forEach((c,i)=>c.classList.toggle('active',i===0));
   renderHome();
@@ -508,7 +511,10 @@ function openTrip(id){
   document.getElementById('homeScreen').style.display='none';
   document.getElementById('plannerScreen').style.display='block';
   document.getElementById('headerCenter').textContent=(trip.emoji||'✈️')+' '+(trip.title||trip.dest);
-  document.getElementById('headerActions').innerHTML='<button class="btn-sm ghost" onclick="goHome()">← 목록</button><button class="btn-sm" onclick="exportData()">💾 백업</button>';
+  document.getElementById('headerActions').innerHTML=
+    '<button class="btn-sm ghost" onclick="goHome()" style="font-size:11px;padding:5px 10px">← 목록</button>'+
+    '<button class="btn-sm ghost" onclick="importTripFile()" style="font-size:11px;padding:5px 10px">📂 불러오기</button>'+
+    '<button class="btn-sm" onclick="exportData()" style="font-size:11px;padding:5px 10px">💾 백업</button>';
   renderDayTabs();renderTimeline();renderReservations();updateBudgetCards();
 }
 function saveCurrentTrip(){
@@ -525,7 +531,7 @@ function saveCurrentTrip(){
     reservations:currentTripData.reservations,
     expenses:currentTripData.expenses,
   });
-  saveAllTrips(trips);showSaveToast();
+  saveAllTrips(trips);showToast("✅ 자동 저장됨");
 }
 ['tripDest','tripStart','tripEnd','tripPeople','totalBudget','currencySelect'].forEach(id=>{
   document.getElementById(id)?.addEventListener('change',()=>{if(currentTripId)saveCurrentTrip();});
@@ -733,7 +739,7 @@ function renderExpenseTable(){
 // ── UTILS ──
 function closeModal(id){document.getElementById(id).classList.remove('open');}
 document.querySelectorAll('.modal-overlay').forEach(el=>{el.addEventListener('click',e=>{if(e.target===el)closeModal(el.id);});});
-function showSaveToast(){
+function showToast(msg){
   let t=document.getElementById('saveToast');
   if(!t){t=document.createElement('div');t.id='saveToast';t.style.cssText='position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:white;padding:9px 20px;border-radius:30px;font-size:12px;font-family:Noto Sans KR,sans-serif;z-index:9999;opacity:0;transition:opacity .3s;pointer-events:none;white-space:nowrap;';document.body.appendChild(t);}
   t.textContent='✅ 자동 저장됨';t.style.opacity='1';clearTimeout(t._t);t._t=setTimeout(()=>{t.style.opacity='0';},1600);
@@ -746,8 +752,279 @@ function exportData(){
   a.download=(trip.title||'travel')+'-backup.json';a.click();URL.revokeObjectURL(a.href);
 }
 
+
+// ── 전체 여행 백업 (JSON) ──
+function exportAllTrips(){
+  const all = JSON.parse(localStorage.getItem('travel_trips_v2')||'[]');
+  if(!all.length){alert('저장된 여행이 없습니다.');return;}
+  const blob=new Blob([JSON.stringify({version:2,exportedAt:new Date().toISOString(),trips:all},null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download='TRAVEL_전체백업_'+new Date().toLocaleDateString('ko-KR').replace(/\. /g,'-').replace('.','')+'json';
+  a.click();URL.revokeObjectURL(a.href);
+  showToast('✅ 전체 여행 백업 완료!');
+}
+
+// ── 전체 여행 불러오기 ──
+function importAllTrips(){
+  const input=document.createElement('input');
+  input.type='file';input.accept='.json';
+  input.onchange=e=>{
+    const file=e.target.files[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      try{
+        const data=JSON.parse(ev.target.result);
+        let incoming=[];
+        if(Array.isArray(data)) incoming=data;
+        else if(data.trips && Array.isArray(data.trips)) incoming=data.trips;
+        else if(data.id) incoming=[data]; // 단일 여행 파일
+        else{alert('올바른 백업 파일이 아닙니다.');return;}
+        const current=JSON.parse(localStorage.getItem('travel_trips_v2')||'[]');
+        // 머지: id 기준으로 최신 덮어쓰기
+        const map={};
+        [...current,...incoming].forEach(t=>{
+          if(!map[t.id]||(t.updatedAt||t.createdAt||0)>=(map[t.id].updatedAt||map[t.id].createdAt||0))
+            map[t.id]=t;
+        });
+        const merged=Object.values(map).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+        localStorage.setItem('travel_trips_v2',JSON.stringify(merged));
+        trips=merged;
+        renderHome();
+        showToast('✅ '+incoming.length+'개 여행 불러오기 완료!');
+      }catch(err){alert('파일을 읽는 중 오류가 발생했습니다.\n'+err.message);}
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+// ── 현재 여행 불러오기 (플래너에서) ──
+function importTripFile(){
+  const input=document.createElement('input');
+  input.type='file';input.accept='.json';
+  input.onchange=e=>{
+    const file=e.target.files[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      try{
+        const data=JSON.parse(ev.target.result);
+        let incoming=[];
+        if(Array.isArray(data)) incoming=data;
+        else if(data.trips && Array.isArray(data.trips)) incoming=data.trips;
+        else if(data.id) incoming=[data];
+        else{alert('올바른 백업 파일이 아닙니다.');return;}
+        const current=JSON.parse(localStorage.getItem('travel_trips_v2')||'[]');
+        const map={};
+        [...current,...incoming].forEach(t=>{
+          if(!map[t.id]||(t.updatedAt||t.createdAt||0)>=(map[t.id].updatedAt||map[t.id].createdAt||0))
+            map[t.id]=t;
+        });
+        const merged=Object.values(map);
+        localStorage.setItem('travel_trips_v2',JSON.stringify(merged));
+        trips=merged;
+        // 현재 열려있는 여행 다시 로드
+        if(currentTripId){
+          const updated=merged.find(t=>t.id===currentTripId);
+          if(updated){currentTripData=JSON.parse(JSON.stringify(updated));currentTripData.currentDay=0;renderDayTabs();renderTimeline();renderReservations();updateBudgetCards();}
+        }
+        showToast('✅ 불러오기 완료!');
+      }catch(err){alert('파일을 읽는 중 오류가 발생했습니다.\n'+err.message);}
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+function showToast(msg){
+  let t=document.getElementById('saveToast');
+  if(!t){t=document.createElement('div');t.id='saveToast';t.style.cssText='position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:white;padding:9px 20px;border-radius:30px;font-size:12px;font-family:Noto Sans KR,sans-serif;z-index:9999;opacity:0;transition:opacity .3s;pointer-events:none;white-space:nowrap;';document.body.appendChild(t);}
+  t.textContent=msg;t.style.opacity='1';clearTimeout(t._t);t._t=setTimeout(()=>{t.style.opacity='0';},2200);
+}
+
 // INIT
 renderHome();
 </script>
+<!-- ── SYNC UI ── -->
+<div id="syncBar" style="display:none;background:#1a1a2e;border-bottom:1px solid #333;padding:8px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:#aaa;">
+  <span style="color:var(--gold);font-weight:600;letter-spacing:1px;">☁ 클라우드 동기화</span>
+  <div id="syncStatus" style="display:flex;align-items:center;gap:6px;">
+    <span id="syncDot" style="width:8px;height:8px;border-radius:50%;background:#555;display:inline-block;"></span>
+    <span id="syncText">로그인 필요</span>
+  </div>
+  <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+    <div id="syncUserInfo" style="display:none;font-size:11px;color:#888;"></div>
+    <button id="btnGoogleLogin" class="btn-sm" onclick="signInGoogle()" style="background:#4285f4;font-size:11px;padding:5px 12px;">🔑 Google 로그인</button>
+    <button id="btnLogout" class="btn-sm ghost" onclick="signOutUser()" style="display:none;font-size:11px;padding:5px 12px;">로그아웃</button>
+    <button id="btnSync" class="btn-sm" onclick="manualSync()" style="display:none;background:#2ecc71;font-size:11px;padding:5px 12px;">🔄 지금 동기화</button>
+  </div>
+</div>
+
+<!-- Firebase SDKs -->
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import { getFirestore, doc, setDoc, getDoc, onSnapshot }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+// ── Firebase 설정 (본인 프로젝트로 교체 가능) ──
+const firebaseConfig = {
+  apiKey: "AIzaSyDemo_REPLACE_WITH_YOUR_KEY",
+  authDomain: "travel-planner-demo.firebaseapp.com",
+  projectId: "travel-planner-demo",
+  storageBucket: "travel-planner-demo.appspot.com",
+  messagingSenderId: "000000000000",
+  appId: "1:000000000000:web:000000000000000000000000"
+};
+
+let app, auth, db, currentUser = null, unsubscribe = null;
+
+try {
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+  document.getElementById('syncBar').style.display = 'flex';
+  initFirebaseAuth();
+} catch(e) {
+  console.warn('Firebase init failed:', e);
+}
+
+function initFirebaseAuth() {
+  onAuthStateChanged(auth, user => {
+    currentUser = user;
+    if (user) {
+      setSyncStatus('connected', user.displayName || user.email);
+      document.getElementById('btnGoogleLogin').style.display = 'none';
+      document.getElementById('btnLogout').style.display = 'inline-flex';
+      document.getElementById('btnSync').style.display = 'inline-flex';
+      document.getElementById('syncUserInfo').style.display = 'block';
+      document.getElementById('syncUserInfo').textContent = user.displayName || user.email;
+      startRealtimeSync(user.uid);
+      pullFromCloud(user.uid);
+    } else {
+      setSyncStatus('disconnected', '로그인 필요');
+      document.getElementById('btnGoogleLogin').style.display = 'inline-flex';
+      document.getElementById('btnLogout').style.display = 'none';
+      document.getElementById('btnSync').style.display = 'none';
+      document.getElementById('syncUserInfo').style.display = 'none';
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+    }
+  });
+}
+
+function setSyncStatus(state, text) {
+  const dot = document.getElementById('syncDot');
+  const txt = document.getElementById('syncText');
+  const colors = { connected:'#2ecc71', syncing:'#f39c12', disconnected:'#e74c3c', offline:'#888' };
+  dot.style.background = colors[state] || '#888';
+  dot.style.animation = state === 'syncing' ? 'pulse 1s infinite' : 'none';
+  txt.textContent = text;
+}
+
+window.signInGoogle = async function() {
+  try {
+    setSyncStatus('syncing', '로그인 중...');
+    const provider = new GoogleAuthProvider();
+    await signInWithPopup(auth, provider);
+  } catch(e) {
+    setSyncStatus('disconnected', '로그인 실패');
+    alert('로그인 실패: ' + e.message);
+  }
+};
+
+window.signOutUser = async function() {
+  if (!confirm('로그아웃할까요? 로컬 데이터는 유지됩니다.')) return;
+  await signOut(auth);
+};
+
+async function pushToCloud(uid) {
+  if (!db || !uid) return;
+  try {
+    setSyncStatus('syncing', '저장 중...');
+    const trips = JSON.parse(localStorage.getItem('travel_trips_v2') || '[]');
+    await setDoc(doc(db, 'users', uid), {
+      trips: JSON.stringify(trips),
+      updatedAt: Date.now(),
+    });
+    setSyncStatus('connected', '동기화 완료 ✓');
+    setTimeout(() => setSyncStatus('connected', currentUser?.displayName || currentUser?.email || '연결됨'), 2000);
+  } catch(e) {
+    setSyncStatus('offline', '저장 실패');
+    console.warn('Push failed:', e);
+  }
+}
+
+async function pullFromCloud(uid) {
+  if (!db || !uid) return;
+  try {
+    setSyncStatus('syncing', '불러오는 중...');
+    const snap = await getDoc(doc(db, 'users', uid));
+    if (snap.exists()) {
+      const data = snap.data();
+      const cloudTrips = JSON.parse(data.trips || '[]');
+      const localTrips = JSON.parse(localStorage.getItem('travel_trips_v2') || '[]');
+      // 클라우드 + 로컬 머지 (id 기준 최신 우선)
+      const merged = mergeTrips(localTrips, cloudTrips);
+      localStorage.setItem('travel_trips_v2', JSON.stringify(merged));
+      window.trips = merged;
+      if (typeof renderHome === 'function') renderHome();
+      setSyncStatus('connected', '불러오기 완료 ✓');
+      setTimeout(() => setSyncStatus('connected', currentUser?.displayName || currentUser?.email || '연결됨'), 2000);
+    } else {
+      // 클라우드에 없으면 로컬 데이터 올리기
+      await pushToCloud(uid);
+    }
+  } catch(e) {
+    setSyncStatus('offline', '불러오기 실패');
+    console.warn('Pull failed:', e);
+  }
+}
+
+function mergeTrips(local, cloud) {
+  const map = {};
+  [...local, ...cloud].forEach(t => {
+    if (!map[t.id] || (t.updatedAt || t.createdAt || 0) > (map[t.id].updatedAt || map[t.id].createdAt || 0)) {
+      map[t.id] = t;
+    }
+  });
+  return Object.values(map);
+}
+
+function startRealtimeSync(uid) {
+  if (unsubscribe) unsubscribe();
+  unsubscribe = onSnapshot(doc(db, 'users', uid), (snap) => {
+    if (!snap.exists()) return;
+    const data = snap.data();
+    const cloudTrips = JSON.parse(data.trips || '[]');
+    const localTrips = JSON.parse(localStorage.getItem('travel_trips_v2') || '[]');
+    const merged = mergeTrips(localTrips, cloudTrips);
+    const localStr = JSON.stringify(localTrips.sort((a,b)=>a.id.localeCompare(b.id)));
+    const mergedStr = JSON.stringify(merged.sort((a,b)=>a.id.localeCompare(b.id)));
+    if (localStr !== mergedStr) {
+      localStorage.setItem('travel_trips_v2', JSON.stringify(merged));
+      window.trips = merged;
+      if (typeof renderHome === 'function') renderHome();
+    }
+  });
+}
+
+window.manualSync = async function() {
+  if (!currentUser) return;
+  await pushToCloud(currentUser.uid);
+};
+
+// saveAllTrips 오버라이드 — 저장 시 자동으로 클라우드에도 동기화
+const _origSaveAllTrips = window.saveAllTrips;
+window.saveAllTrips = function(t) {
+  if (_origSaveAllTrips) _origSaveAllTrips(t);
+  else localStorage.setItem('travel_trips_v2', JSON.stringify(t));
+  if (currentUser) pushToCloud(currentUser.uid);
+};
+</script>
+
+<style>
+#syncBar { display:flex !important; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+</style>
 </body>
 </html>
