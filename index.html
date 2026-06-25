@@ -86,7 +86,12 @@ header{background:var(--ink);color:var(--paper);padding:0 24px;display:flex;alig
 /* TIMELINE */
 .timeline{position:relative;padding-left:58px;}
 .timeline::before{content:'';position:absolute;left:26px;top:12px;bottom:12px;width:2px;background:linear-gradient(to bottom,var(--terracotta),var(--ocean));border-radius:2px;}
-.timeline-item{position:relative;margin-bottom:14px;animation:slideIn .3s ease;}
+.timeline-item{position:relative;margin-bottom:14px;animation:slideIn .3s ease;cursor:grab;user-select:none;}
+.timeline-item:active{cursor:grabbing;}
+.timeline-item.dragging{opacity:.4;transform:scale(.98);}
+.timeline-item.drag-over{border-top:3px solid var(--terracotta);margin-top:-2px;}
+.drag-handle{display:flex;align-items:center;justify-content:center;width:22px;height:100%;color:var(--border);font-size:14px;cursor:grab;flex-shrink:0;padding:0 2px;}
+.drag-handle:hover{color:var(--muted);}
 @keyframes slideIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
 .timeline-dot{position:absolute;left:-36px;top:16px;width:14px;height:14px;border-radius:50%;background:var(--terracotta);border:3px solid var(--paper);box-shadow:0 0 0 2px var(--terracotta);}
 .timeline-time{position:absolute;left:-56px;top:13px;font-family:'DM Mono',monospace;font-size:10px;color:var(--muted);text-align:right;width:42px;transform:translateX(-100%);margin-left:-6px;}
@@ -612,13 +617,19 @@ function renderTimeline(){
   const empty=document.getElementById('scheduleEmpty');
   if(!items.length){container.innerHTML='';empty.style.display='block';return;}
   empty.style.display='none';
-  container.innerHTML=items.map(item=>{
+  container.innerHTML=items.map((item,idx)=>{
     const t=typeMap[item.type]||typeMap.etc;
-    return '<div class="timeline-item">'+
+    return '<div class="timeline-item" draggable="true" data-idx="'+idx+'" '+
+      'ondragstart="onDragStart(event,'+idx+')" '+
+      'ondragover="onDragOver(event)" '+
+      'ondragleave="onDragLeave(event)" '+
+      'ondrop="onDrop(event,'+idx+')" '+
+      'ondragend="onDragEnd(event)">'+
       '<div class="timeline-time">'+item.startTime+'<br><span style="color:var(--border)">↓</span><br>'+item.endTime+'</div>'+
       '<div class="timeline-dot"></div>'+
       '<div class="timeline-card"><div class="timeline-card-top">'+
-        '<div><div class="timeline-card-title">'+t.icon+' '+item.title+'</div>'+
+        '<div class="drag-handle" title="드래그하여 순서 변경">⠿</div>'+
+        '<div style="flex:1"><div class="timeline-card-title">'+t.icon+' '+item.title+'</div>'+
         '<div class="timeline-card-sub">'+
           (item.location?'<span>📍 '+item.location+'</span>':'')+
           (item.cost?'<span>💳 '+getCurrencySymbol()+formatNum(item.cost)+'</span>':'')+
@@ -632,7 +643,93 @@ function renderTimeline(){
           '</div></div>'+
       '</div></div></div>';
   }).join('');
+  initDragDrop();
 }
+
+function initDragDrop(){
+  // PC 드래그
+  let dragSrcIdx=null;
+  document.querySelectorAll('.timeline-item').forEach(el=>{
+    el.addEventListener('dragstart',e=>{
+      dragSrcIdx=parseInt(el.dataset.idx);
+      el.classList.add('dragging');
+      e.dataTransfer.effectAllowed='move';
+    });
+    el.addEventListener('dragover',e=>{
+      e.preventDefault();
+      document.querySelectorAll('.timeline-item').forEach(x=>x.classList.remove('drag-over'));
+      el.classList.add('drag-over');
+    });
+    el.addEventListener('dragleave',e=>{ el.classList.remove('drag-over'); });
+    el.addEventListener('drop',e=>{
+      e.preventDefault();
+      el.classList.remove('drag-over');
+      const targetIdx=parseInt(el.dataset.idx);
+      if(dragSrcIdx===null||dragSrcIdx===targetIdx)return;
+      reorderItems(dragSrcIdx,targetIdx);
+      dragSrcIdx=null;
+    });
+    el.addEventListener('dragend',e=>{
+      el.classList.remove('dragging');
+      document.querySelectorAll('.timeline-item').forEach(x=>x.classList.remove('drag-over'));
+      dragSrcIdx=null;
+    });
+  });
+
+  // 모바일 터치
+  let touchSrcIdx=null, touchClone=null, touchStartY=0, touchStartX=0;
+  document.querySelectorAll('.drag-handle').forEach(handle=>{
+    handle.addEventListener('touchstart',e=>{
+      const item=handle.closest('.timeline-item');
+      touchSrcIdx=parseInt(item.dataset.idx);
+      touchStartY=e.touches[0].clientY;
+      touchStartX=e.touches[0].clientX;
+      const r=item.getBoundingClientRect();
+      touchClone=item.cloneNode(true);
+      touchClone.style.cssText='position:fixed;left:'+r.left+'px;top:'+r.top+'px;width:'+r.width+'px;opacity:.8;pointer-events:none;z-index:9999;box-shadow:0 8px 32px rgba(0,0,0,.3);border-radius:10px;transition:none;';
+      document.body.appendChild(touchClone);
+      item.style.opacity='0.3';
+    },{passive:true});
+  });
+  document.addEventListener('touchmove',e=>{
+    if(touchSrcIdx===null||!touchClone)return;
+    e.preventDefault();
+    const dy=e.touches[0].clientY-touchStartY;
+    const dx=e.touches[0].clientX-touchStartX;
+    touchClone.style.transform='translate('+dx+'px,'+dy+'px)';
+    document.querySelectorAll('.timeline-item').forEach(x=>x.classList.remove('drag-over'));
+    const touch=e.touches[0];
+    document.querySelectorAll('.timeline-item').forEach(el=>{
+      const r=el.getBoundingClientRect();
+      if(touch.clientY>=r.top&&touch.clientY<=r.bottom&&parseInt(el.dataset.idx)!==touchSrcIdx)
+        el.classList.add('drag-over');
+    });
+  },{passive:false,capture:false});
+  document.addEventListener('touchend',e=>{
+    if(touchSrcIdx===null)return;
+    if(touchClone){touchClone.remove();touchClone=null;}
+    document.querySelectorAll('.timeline-item').forEach(el=>el.style.opacity='');
+    const touch=e.changedTouches[0];
+    let targetIdx=null;
+    document.querySelectorAll('.timeline-item').forEach(el=>{
+      const r=el.getBoundingClientRect();
+      if(touch.clientY>=r.top&&touch.clientY<=r.bottom) targetIdx=parseInt(el.dataset.idx);
+      el.classList.remove('drag-over');
+    });
+    if(targetIdx!==null&&targetIdx!==touchSrcIdx) reorderItems(touchSrcIdx,targetIdx);
+    touchSrcIdx=null;
+  });
+}
+
+function reorderItems(fromIdx, toIdx){
+  const items=currentTripData.days[currentTripData.currentDay].items;
+  const moved=items.splice(fromIdx,1)[0];
+  items.splice(toIdx,0,moved);
+  renderTimeline();
+  saveCurrentTrip();
+  showToast('✅ 순서가 변경됐어요!');
+}
+
 
 // ── RESERVATION ──
 const resTypeMap={flight:{label:'항공',icon:'✈️',cls:'flight'},hotel:{label:'숙소',icon:'🏨',cls:'hotel'},tour:{label:'투어',icon:'🎡',cls:'tour'},car:{label:'렌터카',icon:'🚗',cls:'car'},other:{label:'기타',icon:'📌',cls:'other'}};
